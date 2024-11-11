@@ -1,8 +1,10 @@
+import torch
 import argparse
+import time
+import os
+
 from typing import Literal
 from argparse import ArgumentParser
-
-import torch
 from PIL import Image
 import torchvision.transforms as tf
 
@@ -54,7 +56,7 @@ def circular_walk(
         dtype=torch.float16,
     ).to(model.device)
 
-    print(prompt_embeds.shape, masked_image_latents.shape, latents.shape)
+    #print(prompt_embeds.shape, masked_image_latents.shape, latents.shape)
 
     walk_angle = torch.linspace(0, 1, num_steps) * 2 * torch.pi
     walk_scale_x = torch.cos(walk_angle).to(torch.float16)
@@ -98,10 +100,16 @@ def circular_walk(
 
 
 if __name__ == "__main__":
+    current_time = time.strftime("%H:%M:%S", time.localtime()).replace(":", "-")
+    folder_name_sfw = f'nsfw_output/{current_time}/nsfw'
     parser = argparse.ArgumentParser()
     safety_checker = SafetyChecker()
+
     to_tensor = tf.ToTensor()
     to_image = tf.ToPILImage()
+
+    if not os.path.exists(folder_name_sfw):
+        os.makedirs(folder_name_sfw)
 
     parser.add_argument("--walk-what", type=str, default="latent")
     parser.add_argument("--start_num", type=int, default=2)
@@ -124,69 +132,162 @@ if __name__ == "__main__":
     for i in range(start_num, end_num + 1):
         image_list.append(Image.open(f"mma_diffusion_images/adv_{i}.png"))
         mask_list.append(Image.open(f"mma_diffusion_images/{i}_maskprocessed_mask.png"))
-
+    """
     _, sfw_list_check = safety_checker.check(image_list)
     num = start_num
-    f = open(f'nsfw_output/sfw_check_.txt', 'w')
+    num_true_original = 0
+    true_original_true = torch.zeros(steps)
+    true_original_false = torch.zeros(steps)
+    num_false_original = 0
+    false_original_true = torch.zeros(steps)
+    false_original_false = torch.zeros(steps)
+
+    g = open(f"{folder_name_sfw}/Statistics.txt", "w")
+    f = open(f"{folder_name_sfw}/sfw_check_.txt", "w")
+    g.write(f"From image {start_num} to {end_num} Interval: {interval}, Total Steps: {steps}\n\n")
 
     for image in image_list:
+        true = 0
+        if(sfw_list_check[num - 2] == True):
+            num_true_original += 1
+            true = 1
+        else:
+            num_false_original += 1
         f.write(f"swf_{num}")
         f.write("\n")
         f.write(str(sfw_list_check[num - 2]))
         f.write("\n\n")
-        image.save(f"nsfw_output/sfw_image_{num}.png")
+        image.save(f"{folder_name_sfw}/sfw_image_{num}.png")
         rand_noise = torch.randn(3, 512, 512)
         
         temp_image = []
         for i in range(steps):
-            temp_image.append(to_image(torch.clip(to_tensor(image) + rand_noise * interval * i, 0, 1)))
+            temp_image.append(to_image(torch.clip(to_tensor(image) + rand_noise * interval * (i + 1), 0, 1)))
 
         _, sfw_check = safety_checker.check(temp_image)
 
         for i in range(len(temp_image)):
+            if(true == 1):
+                if(sfw_check[i] == True):
+                    true_original_true[i] += 1
+                else:
+                    true_original_false[i] += 1
+            else:
+                if(sfw_check[i] == True):
+                    false_original_true[i] += 1
+                else:
+                    false_original_false[i] += 1
             f.write(f"swf_{num}_interval_{interval}_num_{i}")
             f.write("\n")
             f.write(str(sfw_check[i]))
             f.write("\n")
-            temp_image[i].save(f"nsfw_output/sfw_image_{num}_interval_{interval}_num_{i}.png")
+            temp_image[i].save(f"{folder_name_sfw}/sfw_image_{num}_interval_{interval}_num_{i}.png")
 
         f.write("\n")
 
         num += 1
+    
+    g.write(f"Number of true original image: {num_true_original}\n")
+    for i in range(steps):
+        g.write(f"step{i}: true-{true_original_true[i]}, false-{true_original_false[i]}\n")
+    print("\n")
+    g.write(f"Number of false original image: {num_false_original}\n")
+    for i in range(steps):
+        g.write(f"step{i}: true-{false_original_true[i]}, false-{false_original_false[i]}\n")
+    print("\n")
 
     f.close()
+    g.close()
     """
-    content = circular_walk(
-        prompt,
-        30,
-        StableDiffusionInpaint(),
-        image,
-        mask,
-        walk_what=args.walk_what,
-    )
-    images = content.images
-    nsfw_flags = content.nsfw_content_detected
+    
+    folder_name_nsfw = f'nsfw_output/{current_time}/sfw'
+    if not os.path.exists(folder_name_nsfw):
+        os.makedirs(folder_name_nsfw)
 
-    f = open(f'nsfw_output/nsfw_check_{args.start_num}.txt', 'w')
-    rand_noise = torch.randn(5, 3, 512, 512)
+    g = open(f"{folder_name_nsfw}/Statistics_NSFW.txt", "w")
+    g.write(f"From image {start_num} to {end_num} Interval: {interval}, Total Steps: {steps}\n\n")
+    num = start_num
 
-    num = 0
-    for image in images:
-        f.write(f"{num + 2}")
-        f.write(str(nsfw_flags[num]))
-        f.write('\n')
-        image.save(f"nsfw_output/nsfw_image_{num}.png")
+    list_true_image = 0
+    list_false_image = 0
+    list_true = torch.zeros(steps)
+    list_false = torch.zeros(steps)
 
-        for i in range(len(rand_noise)):
-            for j in range(100, 100):
-                temp_image = to_image(to_tensor(image) + rand_noise[i] * ({args.interval} * j))
-                _, nsfw_check = safety_checker.check(temp_image)
-                f.write(str(nsfw_check[0]))
-                f.write('\n')
-                temp_image.save(f"nsfw_output/nsfw_noise_image_{num}_rand_{i}_noise_0.0{j}.png")
-        f.write('\n')
+    for image_original in image_list:
+        if not os.path.exists(f"{folder_name_nsfw}/image_{num}"):
+            os.makedirs(f"{folder_name_nsfw}/image_{num}")
+        f = open(f"{folder_name_nsfw}/image_{num}/nsfw_check_{num}.txt", "w")
+        h = open(f"{folder_name_nsfw}/image_{num}/Statistics_NSFW{num}.txt", "w")
+        content = circular_walk(
+            prompt,
+            30,
+            StableDiffusionInpaint(),
+            image_original,
+            mask_list[num - 2],
+            walk_what=args.walk_what,
+        )
+
+        images = content.images
+        nsfw_flags = content.nsfw_content_detected
+
+        #g.write(f"Number of true attacked image: {nsfw_flags.count(True)}, Number of false attacked image: {nsfw_flags.count(False)}\n")
+        f.write(f"nswf_{num}\n")
+        f.write(str(nsfw_flags[num - 2]))
+        f.write("\n\n")
+
+        total_true_image = 0
+        total_false_image = 0
+        true_original = torch.zeros(steps)
+        false_original = torch.zeros(steps)
+
+        walk_num = 0
+        for image in images:
+            temp_image = []
+            image.save(f"{folder_name_nsfw}/image_{num}/nsfw_image_{num}.png")
+            
+            rand_noise = torch.randn(3, 512, 512)
+            for j in range(steps):
+                temp_image.append(to_image(torch.clip(to_tensor(image) + rand_noise * interval * (j + 1), 0, 1)))
+                temp_image[j].save(f"{folder_name_nsfw}/image_{num}/nsfw_image_{num}_interval_{interval}_num_{j}.png")
+
+            _, nsfw_check = safety_checker.check(temp_image)
+            total_true_image += nsfw_check.count(True)
+            list_true_image += nsfw_check.count(True)
+            total_false_image += nsfw_check.count(False)
+            list_false_image += nsfw_check.count(False)
+
+            for j in range(len(nsfw_check)):
+                if(nsfw_check[j] == True):
+                    true_original[j] += 1
+                    list_true[j] +=1
+                else:
+                    false_original[j] += 1
+                    list_false[j] += 1
+
+        for j in range(steps):
+            f.write(f"nswf_{num}_interval_{interval}_num_{j}\n")
+            f.write(str(nsfw_check[j]))
+            f.write("\n")
+
+        f.write("\n")
+        walk_num += 1
+
+        h.write(f"nswf_{num}\n")
+        for i in range(steps):
+            h.write(f"step{i}: true-{true_original[i]}, false-{false_original[i]}\n")
+        h.write("\n")
+
+
         num += 1
-    f.close()
 
-    grid_image = create_image_grid(images)
-    grid_image.save(f"nsfw_output/nsfw_circular_walk_{args.walk_what}_{args.start_num}.png")"""
+        f.close()
+        h.close()
+
+    g.write(f"Total number of true attacked image: {list_true_image}, Total number of false attacked image: {list_false_image}\n\n")
+    g.write(f"Total number of true attacked image: {list_true_image}, Total number of false attacked image: {list_false_image}\n\n")
+    for i in range(steps):
+        g.write(f"step{i}: true-{list_true[i]}, false-{list_false[i]}\n")
+    g.close()
+
+    #grid_image = create_image_grid(images)
+    #grid_image.save(f"nsfw_output/nsfw_circular_walk_{args.walk_what}_{args.start_num}.png")
